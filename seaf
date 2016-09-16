@@ -1,0 +1,252 @@
+#!/bin/bash
+##
+## seafile API v2 client
+## 2016-09-16 - BeF <bef@pentaphase.de>
+##
+## API manual: http://manual.seafile.com/develop/web_api_v2.1.html
+##
+
+sf_api_url="https://example.com/api2"
+sf_username=""
+sf_auth_token=""
+sf_debug=1
+sf_statusfile="$HOME/.seafile-cli.conf"
+
+## curl options:
+## -S: show errors
+## -s: silent (no progress output)
+## -f: fail on server errors
+curl="curl -Ss"
+jq=jq
+
+function msg() {
+	echo "[#] $*" >&2
+}
+
+# function msg_input() {
+# 	echo "[?] $*"
+# }
+
+function msg_debug() {
+	if [[ $sf_debug -ne 0 ]]; then
+		echo "[D] $*" >&2
+	fi
+}
+
+function msg_error() {
+	echo "[E] $*" >&2
+}
+
+function msg_warning() {
+	echo "[W] $*" >&2
+}
+
+##
+
+function call() {
+	msg_debug "calling: $@"
+	"$@"
+	ret=$?
+	if [[ $ret -ne 0 ]]; then
+		msg_error ":( something went terribly wrong here."
+		return $ret
+	else
+		msg_debug "call complete."
+		return 0
+	fi
+}
+
+##
+
+function urlencode() {
+	echo -n "$1" |$jq -s -R -r @uri
+}
+
+function json2text() {
+	$jq -r @text
+}
+
+function sf_curl() {
+	local url="$1"; shift
+	if [[ "${url#http}" == "$url" ]]; then
+		url="${sf_api_url}${url}"
+	fi
+	call $curl -H 'Accept: application/json; charset=utf-8' "$@" "$url"
+}
+
+function sf_curl_auth() {
+	local url="$1"; shift
+	sf_curl "$url" -H "Authorization: Token ${sf_auth_token}" "$@"
+}
+
+function sf_write_status() {
+	echo "## $(date)" >"$sf_statusfile"
+	echo "sf_api_url=\"$sf_api_url\"" >>"$sf_statusfile"
+	echo "sf_username=\"$sf_username\"" >>"$sf_statusfile"
+	echo "sf_auth_token=\"$sf_auth_token\"" >>"$sf_statusfile"
+}
+
+sf_get_repo_id() {
+	repo="$1"
+	sf_curl_auth /repos/ |jq -r ".[] | select(.name == \"$repo\") | .id"
+}
+
+##
+
+function do_login() {
+	local api_url
+	local user
+	local pass
+	local token
+	read -er -p "[?] API URL: [$sf_api_url] " api_url
+	if [[ -n "$api_url" ]]; then
+		sf_api_url="$api_url"
+	fi
+
+	msg "checking..."
+	if [[ $(sf_curl /ping/ |json2text) != "pong" ]]; then
+		msg_error "API check failed"
+		return 1
+	fi
+	
+	read -er -p "[?] Username: [$sf_username] " user
+	if [[ -n "$user" ]]; then
+		sf_username="$user"
+	fi
+
+	read -er -p "[?] Password: " pass
+	
+	user=$(urlencode "$sf_username")
+	pass=$(urlencode "$pass")
+	msg "logging in..."
+	res=$(sf_curl /auth-token/ --data-raw "username=$user&password=$pass")
+	unset pass
+	msg_debug "response: $res"
+
+	## responses:
+	## {"token":"5e4749f1dc2d22621b8..."}
+	## {"username":["This field may not be blank."],"password":["This field may not be blank."]}
+	## {"non_field_errors":["Unable to login with provided credentials."]}
+	token=$(echo "$res" |jq -r .token)
+	if [[ "$token" == "null" ]]; then
+		msg_error "login failed"
+		return 1
+	fi
+	sf_auth_token="$token"
+	sf_write_status
+	msg "ok."
+}
+
+function do_ls() {
+	local repo
+	local path
+	local repo_id
+	
+	if [[ $# -eq 0 ]]; then
+		sf_curl_auth /repos/ |jq -r '.[] | .name'
+		return
+	fi
+
+	if [[ $# -ge 1 ]]; then
+		repo="$1"
+	fi
+
+	path=/
+	if [[ $# -ge 2 ]]; then
+		path=$(urlencode "$2")
+	fi
+
+	repo_id=$(sf_get_repo_id $repo)
+	if [[ -z "$repo_id" ]]; then
+		msg_error "library '$repo' not found"
+		return
+	fi
+	
+	sf_curl_auth "/repos/$repo_id/dir/?p=$path" |jq -r '.[] | .name'
+}
+
+function do_mkdir() {
+	local repo
+	local repo_id
+	local dir
+	if [[ $# -ne 2 ]]; then
+		msg_error "need exactly 2 arguments: <library> <directory>"
+		return
+	fi
+	repo="$1"
+	dir=$(urlencode "$2")
+	
+	repo_id=$(sf_get_repo_id $repo)
+	if [[ -z "$repo_id" ]]; then
+		msg_error "library '$repo' not found"
+		return
+	fi
+	
+	sf_curl_auth "/repos/$repo_id/dir/?p=$dir" -d  "operation=mkdir"
+}
+
+function do_upload() {
+	local repo
+	local repo_id
+	local path
+	local upload_url
+	local fn
+	
+	if [[ $# -lt 3 ]]; then
+		msg_error "need at least 3 arguments: <library> <path> <files>..."
+		return
+	fi
+	repo="$1"; shift
+	path="$1"; shift
+	path_url=$(urlencode "$path")
+	
+	for fn in "$@"; do
+		if [[ ! -f "$fn" ]]; then
+			msg_error "cannot find '$fn'"
+			return
+		fi
+	done
+	
+	repo_id=$(sf_get_repo_id $repo)
+	if [[ -z "$repo_id" ]]; then
+		msg_error "library '$repo' not found"
+		return
+	fi
+
+	for fn in "$@"; do
+		upload_url=$(sf_curl_auth "/repos/$repo_id/upload-link/?p=$path_url" |json2text)
+		msg_debug "uploading $fn to $upload_url ..."
+		fn_url=$(urlencode "$fn")
+		sf_curl_auth "$upload_url" -F "file=@$fn" -F "parent_dir=$path" -F "filename=$fn_url" 
+	done
+}
+
+##
+
+if [[ -f "$sf_statusfile" ]]; then
+	. "$sf_statusfile"
+fi
+
+action="$1"; shift
+case "$action" in
+	ping)
+		sf_curl /ping/ |json2text
+		;;
+	server-info)
+		sf_curl /server-info/ |jq
+		;;
+	auth-ping)
+		sf_curl_auth /auth/ping/ |jq
+		;;
+	account-info)
+		sf_curl_auth /account/info/ |jq
+		;;
+	*)
+		if [[ "$(type -t "do_$action")" == "function" ]]; then
+			"do_$action" "$@"
+		else
+			msg_error "$action: invalid action"
+			exit 1
+		fi
+		;;
+esac
