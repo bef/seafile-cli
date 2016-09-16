@@ -156,7 +156,7 @@ function do_ls() {
 		path=$(urlencode "$2")
 	fi
 
-	repo_id=$(sf_get_repo_id $repo)
+	repo_id=$(sf_get_repo_id "$repo")
 	if [[ -z "$repo_id" ]]; then
 		msg_error "library '$repo' not found"
 		return
@@ -176,7 +176,7 @@ function do_mkdir() {
 	repo="$1"
 	dir=$(urlencode "$2")
 	
-	repo_id=$(sf_get_repo_id $repo)
+	repo_id=$(sf_get_repo_id "$repo")
 	if [[ -z "$repo_id" ]]; then
 		msg_error "library '$repo' not found"
 		return
@@ -208,7 +208,7 @@ function do_upload() {
 		fi
 	done
 	
-	repo_id=$(sf_get_repo_id $repo)
+	repo_id=$(sf_get_repo_id "$repo")
 	if [[ -z "$repo_id" ]]; then
 		msg_error "library '$repo' not found"
 		return
