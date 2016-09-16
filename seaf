@@ -9,7 +9,7 @@
 sf_api_url="https://example.com/api2"
 sf_username=""
 sf_auth_token=""
-sf_debug=1
+sf_debug=0
 sf_statusfile="$HOME/.seafile-cli.conf"
 
 ## curl options:
@@ -191,6 +191,7 @@ function do_upload() {
 	local path
 	local upload_url
 	local fn
+	local path2
 	
 	if [[ $# -lt 3 ]]; then
 		msg_error "need at least 3 arguments: <library> <path> <files>..."
@@ -201,7 +202,7 @@ function do_upload() {
 	path_url=$(urlencode "$path")
 	
 	for fn in "$@"; do
-		if [[ ! -f "$fn" ]]; then
+		if [[ ! -f "$fn" && ! -d "$fn" ]]; then
 			msg_error "cannot find '$fn'"
 			return
 		fi
@@ -214,10 +215,21 @@ function do_upload() {
 	fi
 
 	for fn in "$@"; do
+		if [[ -d "$fn" ]]; then
+			path2="$path/$fn"
+			if [[ "$path" == "/" ]]; then
+				path2="/$fn"
+			fi
+			do_mkdir "$repo" "$path2"
+			do_upload "$repo" "$path2" "$fn"/*
+			continue
+		fi
 		upload_url=$(sf_curl_auth "/repos/$repo_id/upload-link/?p=$path_url" |json2text)
-		msg_debug "uploading $fn to $upload_url ..."
-		fn_url=$(urlencode "$fn")
-		sf_curl_auth "$upload_url" -F "file=@$fn" -F "parent_dir=$path" -F "filename=$fn_url" 
+		msg "uploading $fn to $upload_url ..."
+		fn_url=$(basename "$fn")
+		fn_url=$(urlencode "$fn_url")
+		sf_curl_auth "$upload_url" -F "file=@$fn" -F "parent_dir=$path" -F "filename=$fn_url"
+		echo
 	done
 }
 
