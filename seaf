@@ -119,7 +119,7 @@ function do_login() {
 	user=$(urlencode "$sf_username")
 	pass=$(urlencode "$pass")
 	msg "logging in..."
-	res=$(sf_curl /auth-token/ --data-raw "username=$user&password=$pass")
+	res=$(sf_curl /auth-token/ -d "username=$user&password=$pass")
 	unset pass
 	msg_debug "response: $res"
 
